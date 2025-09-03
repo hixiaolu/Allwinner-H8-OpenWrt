@@ -1,0 +1,152 @@
+#!/bin/sh
+
+# EMMC自动挂载脚本
+# 当检测到EMMC设备时自动挂载
+
+# 日志文件
+LOG_FILE="/var/log/emmc_mount.log"
+
+# 记录日志
+log() {
+    echo "$(date): $1" >> "$LOG_FILE"
+}
+
+# 检查是否是EMMC设备
+is_emmc_device() {
+    case "$DEVNAME" in
+        mmcblk*p*)
+            # 检查是否是EMMC分区
+            if [ -e "/sys/block/${DEVNAME%p*}/device/type" ]; then
+                TYPE=$(cat "/sys/block/${DEVNAME%p*}/device/type")
+                if [ "$TYPE" = "MMC" ]; then
+                    return 0
+                fi
+            fi
+            ;;
+    esac
+    return 1
+}
+
+# 检查文件系统类型
+get_fs_type() {
+    blkid -o value -s TYPE "/dev/$DEVNAME" 2>/dev/null
+}
+
+# 创建挂载点
+create_mount_point() {
+    local mount_point="/mnt/$DEVNAME"
+    
+    if [ ! -d "$mount_point" ]; then
+        mkdir -p "$mount_point"
+        log "创建挂载点: $mount_point"
+    fi
+    
+    echo "$mount_point"
+}
+
+# 挂载设备
+mount_device() {
+    local mount_point=$(create_mount_point)
+    local fs_type=$(get_fs_type)
+    
+    if [ -z "$fs_type" ]; then
+        log "无法确定 /dev/$DEVNAME 的文件系统类型"
+        return 1
+    fi
+    
+    # 挂载选项
+    local mount_opts="rw,relatime"
+    
+    # 根据文件系统类型添加特定选项
+    case "$fs_type" in
+        vfat|fat)
+            mount_opts="$mount_opts,utf8,umask=0000"
+            ;;
+        ntfs)
+            mount_opts="$mount_opts,utf8,umask=0000"
+            ;;
+        exfat)
+            mount_opts="$mount_opts,utf8,umask=0000"
+            ;;
+        ext4)
+            mount_opts="$mount_opts,data=ordered"
+            ;;
+    esac
+    
+    # 执行挂载
+    mount -t "$fs_type" -o "$mount_opts" "/dev/$DEVNAME" "$mount_point"
+    
+    if [ $? -eq 0 ]; then
+        log "成功挂载 /dev/$DEVNAME 到 $mount_point (文件系统: $fs_type)"
+        
+        # 创建符号链接方便访问
+        ln -sf "$mount_point" "/mnt/emmc_${DEVNAME##*p}"
+        log "创建符号链接: /mnt/emmc_${DEVNAME##*p} -> $mount_point"
+        
+        return 0
+    else
+        log "挂载 /dev/$DEVNAME 到 $mount_point 失败"
+        return 1
+    fi
+}
+
+# 卸载设备
+umount_device() {
+    local mount_point="/mnt/$DEVNAME"
+    
+    # 检查设备是否已挂载
+    if grep -q "/dev/$DEVNAME" /proc/mounts; then
+        # 卸载设备
+        umount "/dev/$DEVNAME"
+        
+        if [ $? -eq 0 ]; then
+            log "成功卸载 /dev/$DEVNAME"
+            
+            # 删除符号链接
+            if [ -L "/mnt/emmc_${DEVNAME##*p}" ]; then
+                rm -f "/mnt/emmc_${DEVNAME##*p}"
+                log "删除符号链接: /mnt/emmc_${DEVNAME##*p}"
+            fi
+            
+            # 删除挂载点
+            if [ -d "$mount_point" ]; then
+                rmdir "$mount_point"
+                log "删除挂载点: $mount_point"
+            fi
+            
+            return 0
+        else
+            log "卸载 /dev/$DEVNAME 失败"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# 主逻辑
+case "$ACTION" in
+    add)
+        # 检查是否是EMMC设备
+        if is_emmc_device; then
+            log "检测到EMMC设备: /dev/$DEVNAME"
+            
+            # 等待设备节点创建完成
+            sleep 1
+            
+            # 挂载设备
+            mount_device
+        fi
+        ;;
+    remove)
+        # 检查是否是EMMC设备
+        if is_emmc_device; then
+            log "EMMC设备移除: /dev/$DEVNAME"
+            
+            # 卸载设备
+            umount_device
+        fi
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,33 @@
+# 编译生成的文件
+/bin/
+/build_dir/
+/dl/
+/feeds/
+/staging_dir/
+/tmp/
+/logs/
+
+# 配置文件
+/.config
+/.config.old
+/key-build*
+
+# 临时文件
+*.o
+*.a
+*.so
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# 硬件配置文件
+hardware_profile
+hardware_info
+.1gb_version
+.2gb_version
+
+# 编辑器配置
+.vscode/
+.idea/
+*.sublime-*

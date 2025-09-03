@@ -1,0 +1,144 @@
+#!/bin/sh
+#
+# 板级自定义配置脚本
+# 用于Allwinner H8设备的特定配置
+
+. /lib/functions/uci-defaults.sh
+
+board_config_update
+
+# 检测硬件配置
+detect_hardware() {
+    # 检查是否存在硬件信息文件
+    if [ -f "/etc/hardware_info" ]; then
+        . /etc/hardware_info
+        return 0
+    fi
+    
+    # 如果没有硬件信息文件，尝试运行检测脚本
+    if [ -x "/usr/bin/detect_hardware.sh" ]; then
+        /usr/bin/detect_hardware.sh
+        if [ -f "/etc/hardware_info" ]; then
+            . /etc/hardware_info
+            return 0
+        fi
+    fi
+    
+    # 默认配置
+    RAM_SIZE="1g"
+    STORAGE_TYPE="emmc"
+    NETWORK_INTERFACE="eth0"
+    return 1
+}
+
+# 根据RAM大小优化系统配置
+optimize_for_ram() {
+    local ram_size="$1"
+    
+    case "$ram_size" in
+        2g)
+            # 2GB RAM优化
+            uci set system.@system[0].zonename='Asia/Shanghai'
+            uci set system.@system[0].timezone='CST-8'
+            
+            # 调整内存相关参数
+            echo "vm.min_free_kbytes=65536" >> /etc/sysctl.conf
+            echo "vm.swappiness=10" >> /etc/sysctl.conf
+            
+            # 启用zram
+            uci set system.@system[0].zram_size_mb='512'
+            uci set system.@system[0].zram_comp_algo='lzo'
+            ;;
+        *)
+            # 1GB RAM优化 (默认)
+            uci set system.@system[0].zonename='Asia/Shanghai'
+            uci set system.@system[0].timezone='CST-8'
+            
+            # 调整内存相关参数 - 更保守的设置
+            echo "vm.min_free_kbytes=32768" >> /etc/sysctl.conf
+            echo "vm.swappiness=60" >> /etc/sysctl.conf
+            
+            # 启用zram但使用较小的大小
+            uci set system.@system[0].zram_size_mb='256'
+            uci set system.@system[0].zram_comp_algo='lzo'
+            ;;
+    esac
+}
+
+# 配置网络接口
+setup_network() {
+    local network_interface="$1"
+    
+    # 配置LAN接口
+    uci set network.lan.ifname="$network_interface"
+    uci set network.lan.proto='static'
+    uci set network.lan.ipaddr='192.168.1.1'
+    uci set network.lan.netmask='255.255.255.0'
+    uci set network.lan.gateway='192.168.1.1'
+    
+    # 配置DHCP
+    uci set dhcp.lan.ignore='0'
+    uci set dhcp.lan.start='100'
+    uci set dhcp.lan.limit='150'
+    uci set dhcp.lan.leasetime='12h'
+}
+
+# 配置存储
+setup_storage() {
+    local storage_type="$1"
+    
+    case "$storage_type" in
+        emmc)
+            # EMMC存储配置
+            if [ -b "/dev/mmcblk0p1" ]; then
+                # 创建fstab条目
+                block detect > /etc/config/fstab
+                
+                # 启用自动挂载
+                uci set fstab.@global[0].auto_mount='1'
+                uci set fstab.@global[0].auto_swap='1'
+                uci set fstab.@global[0].anon_mount='1'
+                
+                # 如果有额外分区，配置为数据存储
+                if [ -b "/dev/mmcblk0p2" ]; then
+                    mkdir -p /mnt/data
+                    
+                    # 检查文件系统类型
+                    local fs_type=$(blkid -o value -s TYPE /dev/mmcblk0p2)
+                    
+                    if [ -z "$fs_type" ]; then
+                        # 如果没有文件系统，格式化为ext4
+                        mkfs.ext4 -L data /dev/mmcblk0p2
+                        fs_type="ext4"
+                    fi
+                    
+                    # 添加到fstab
+                    uci add fstab mount
+                    uci set fstab.@mount[-1].device='/dev/mmcblk0p2'
+                    uci set fstab.@mount[-1].target='/mnt/data'
+                    uci set fstab.@mount[-1].fstype="$fs_type"
+                    uci set fstab.@mount[-1].options='rw,sync'
+                    uci set fstab.@mount[-1].enabled='1'
+                    uci set fstab.@mount[-1].enabled_fsck='0'
+                fi
+            fi
+            ;;
+        nand)
+            # NAND存储配置
+            # 对于NAND存储，通常不需要特殊配置，因为OpenWrt已经处理了UBIFS
+            ;;
+    esac
+}
+
+# 主逻辑
+detect_hardware
+
+# 根据检测到的硬件配置系统
+optimize_for_ram "$RAM_SIZE"
+setup_network "$NETWORK_INTERFACE"
+setup_storage "$STORAGE_TYPE"
+
+# 应用更改
+board_config_commit
+
+exit 0
